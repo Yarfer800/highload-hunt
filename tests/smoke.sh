@@ -7,7 +7,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$ROOT"
+cd "$ROOT" || exit 1
 
 FULL=0
 [ "${1:-}" = "--full" ] && FULL=1
