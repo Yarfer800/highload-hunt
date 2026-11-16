@@ -104,9 +104,9 @@ cd highload-hunt
 | **Antigravity / Gemini** | `./install.sh --all` | `~/.antigravity/skills`, `~/.gemini/skills` + `AGENTS.md` snippet |
 | **This repo only** | `./install.sh --project .` | `./.agents/skills/highload-hunt` + `./.claude/skills/highload-hunt` |
 
-Other flags: `--mode copy` (no symlink), `--force` (replace existing), `--dry-run`, `--uninstall`.
+Other flags: `--mode copy` (no symlink), `--force` (replace existing), `--dry-run`, `--uninstall`, `--no-commands`.
 
-Harnesses that read `AGENTS.md` instead of a skills directory get a ready block printed by the installer:
+The installer also wires a slash command where the harness supports custom commands: **Claude Code** (`~/.claude/commands`), **Codex** (`~/.codex/prompts`), **OpenCode** (`~/.config/opencode/commands`). Harnesses that read `AGENTS.md` instead of a skills directory get a ready block printed by the installer:
 
 ```markdown
 ## Highload performance hunts
@@ -114,6 +114,25 @@ When asked to load-test, stress-test, benchmark, or explain slowness under
 traffic, read ~/.agents/skills/highload-hunt/SKILL.md and follow its phases
 and hard gates. Report first; do not change production code before approval.
 ```
+
+## ⌨️ Slash command
+
+Installed next to the skill where supported (`/highload-hunt`):
+
+```
+/highload-hunt GET /api/items --rps 300 --slo-p95 200 --slo-p99 500
+/highload-hunt --tier S --report-only
+/highload-hunt checkout flow, 500 concurrent users
+```
+
+Arguments are freeform: the command loads `SKILL.md`, runs preflight, then the protocol. With no arguments it treats the project as the target and asks for the production peak rate and latency expectations.
+
+| Harness | Command file | Invocation |
+|---------|--------------|------------|
+| Claude Code | `~/.claude/commands/highload-hunt.md` | `/highload-hunt` |
+| Codex | `~/.codex/prompts/highload-hunt.md` | `/highload-hunt` |
+| OpenCode | `~/.config/opencode/commands/highload-hunt.md` | `/highload-hunt` |
+| DSH, Antigravity, Gemini | skill only | natural language trigger |
 
 ## ⚡ Quick start
 
@@ -163,6 +182,7 @@ It also fails the run when the **generator** becomes the bottleneck (`dropped_it
 | `references/stack-detection.md` | Manifest → stack → runner → entry point, monorepo rules |
 | `references/report-template.md` | The report skeleton the agent must fill |
 | `templates/` | k6 scenario, locust journey, Node/Python/Go concurrency tests |
+| `commands/highload-hunt.md` | `/highload-hunt` launcher for Claude Code, Codex, OpenCode |
 | `scripts/perf-doctor.sh` | Read-only preflight: stack, run command, datastore, generators, CI, hardware |
 | `scripts/slo-gate.sh` | Result JSON → PASS/FAIL exit code for CI |
 
@@ -201,6 +221,9 @@ Gates apply at every tier. A Tier S hunt still produces numbers, a test, and a v
 **Does it need k6 installed?**
 No. It picks from what is available (`k6`, `locust`, `autocannon`, `wrk`, `vegeta`, `ab`) and says which one it used. `slo-gate.sh` needs only `bash` and `python3`.
 
+**Is there a slash command?**
+Yes, `/highload-hunt` for Claude Code, Codex, and OpenCode. It is a thin launcher: it loads the skill, runs preflight, and then follows the protocol. Other harnesses trigger the skill from natural language.
+
 **Will it load-test production?**
 The protocol targets a local or staging environment. Pointing a generator at production is a separate decision with its own approval, and the skill requires you to say so explicitly.
 
@@ -215,8 +238,4 @@ It is a protocol that tells an agent how to use one correctly — and a few scri
 
 ## 🤝 Contributing
 
-Issues and PRs welcome: new defect-catalog entries with a real reproducer, new stack detection rows, additional generator templates. Keep the zero-dependency rule for `scripts/`.
-
-## 📄 License
-
-[MIT](LICENSE) © Yarfer
+Issues and PRs welcome: new defect-catalog entries with a real reproducer, new stack detection rows, additional generator templat
