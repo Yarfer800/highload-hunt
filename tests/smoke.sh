@@ -12,6 +12,9 @@ cd "$ROOT" || exit 1
 FULL=0
 [ "${1:-}" = "--full" ] && FULL=1
 
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+
 PASS=0
 FAIL=0
 SKIP=0
@@ -75,7 +78,7 @@ check_metric tests/fixtures/locust_stats.csv error_rate 0.164 0.001
 section "slo-gate"
 gate_case() {
   local expect="$1" label="$2"; shift 2
-  bash scripts/slo-gate.sh "$@" >/tmp/opencode/gate.out 2>&1
+  bash scripts/slo-gate.sh "$@" >$WORK/gate.out 2>&1
   local code=$?
   if { [ "$expect" = pass ] && [ $code -eq 0 ]; } || { [ "$expect" = fail ] && [ $code -ne 0 ]; }; then
     ok "$label"
@@ -93,9 +96,9 @@ gate_case pass "ab text" --file tests/fixtures/ab.txt --p95 200 --err 1 --rps 90
 gate_case pass "vegeta json" --file tests/fixtures/vegeta.json --p95 200
 
 section "perf-diff"
-mkdir -p /tmp/opencode/smoke/before /tmp/opencode/smoke/after
-cp tests/fixtures/k6-summary.json /tmp/opencode/smoke/before/a.json
-python3 - tests/fixtures/k6-summary.json /tmp/opencode/smoke/after/a.json <<'PY'
+mkdir -p $WORK/smoke/before $WORK/smoke/after
+cp tests/fixtures/k6-summary.json $WORK/smoke/before/a.json
+python3 - tests/fixtures/k6-summary.json $WORK/smoke/after/a.json <<'PY'
 import json, sys
 data = json.load(open(sys.argv[1]))
 steady = data["metrics"]["http_req_duration{phase:steady}"]["values"]
@@ -104,14 +107,14 @@ steady["p(99)"] = 201.2
 steady["p(50)"] = 41.0
 json.dump(data, open(sys.argv[2], "w"), indent=2)
 PY
-if bash scripts/perf-diff.sh --before /tmp/opencode/smoke/before --after /tmp/opencode/smoke/after \
-  --p95 200 --err 0.5 --rps 300 >/tmp/opencode/diff.out 2>&1; then
-  if grep -q 'improved' /tmp/opencode/diff.out; then ok "detects improvement"; else bad "detects improvement" "no 'improved' row"; fi
+if bash scripts/perf-diff.sh --before $WORK/smoke/before --after $WORK/smoke/after \
+  --p95 200 --err 0.5 --rps 300 >$WORK/diff.out 2>&1; then
+  if grep -q 'improved' $WORK/diff.out; then ok "detects improvement"; else bad "detects improvement" "no 'improved' row"; fi
 else
   bad "perf-diff passes gate" "exit non-zero"
 fi
-if bash scripts/perf-diff.sh --before /tmp/opencode/smoke/before --after /tmp/opencode/smoke/before \
-  --p95 100 >/tmp/opencode/diff2.out 2>&1; then
+if bash scripts/perf-diff.sh --before $WORK/smoke/before --after $WORK/smoke/before \
+  --p95 100 >$WORK/diff2.out 2>&1; then
   bad "perf-diff fails a missed gate" "exit 0"
 else
   ok "perf-diff fails a missed gate"
@@ -126,16 +129,16 @@ fi
 if grep -q '^## Hardware' <<<"$(bash scripts/perf-doctor.sh .)"; then ok "doctor human output"; else bad "doctor human output"; fi
 
 section "perf-verify"
-VPROJ=/tmp/opencode/smoke/verify
+VPROJ=$WORK/smoke/verify
 rm -rf "$VPROJ"
 mkdir -p "$VPROJ/tests/perf" "$VPROJ/results/run"
 cp examples/report.md "$VPROJ/PERF-REPORT.md"
 printf 'import test from "node:test"\n' >"$VPROJ/tests/perf/items.load.test.mjs"
 for i in 1 2 3; do cp tests/fixtures/k6-summary.json "$VPROJ/results/run/r$i.json"; done
-if bash scripts/perf-verify.sh --dir "$VPROJ" --runs 3 >/tmp/opencode/verify.out 2>&1; then
+if bash scripts/perf-verify.sh --dir "$VPROJ" --runs 3 >$WORK/verify.out 2>&1; then
   ok "verify accepts a complete hunt"
 else
-  bad "verify accepts a complete hunt" "$(grep '\[FAIL\]' /tmp/opencode/verify.out | head -3 | tr '\n' ' ')"
+  bad "verify accepts a complete hunt" "$(grep '\[FAIL\]' $WORK/verify.out | head -3 | tr '\n' ' ')"
 fi
 sed -i '/Reproducer/d' "$VPROJ/PERF-REPORT.md"
 if bash scripts/perf-verify.sh --dir "$VPROJ" --runs 3 >/dev/null 2>&1; then
@@ -145,22 +148,22 @@ else
 fi
 
 section "demo regression test"
-if node --test examples/demo-api/test/detail.test.mjs >/tmp/opencode/demo-test.out 2>&1; then
+if node --test examples/demo-api/test/detail.test.mjs >$WORK/demo-test.out 2>&1; then
   ok "demo-api regression test"
 else
-  bad "demo-api regression test" "$(tail -5 /tmp/opencode/demo-test.out | tr '\n' ' ')"
+  bad "demo-api regression test" "$(tail -5 $WORK/demo-test.out | tr '\n' ' ')"
 fi
 
 section "install matrix"
 FAKE=$(mktemp -d)
-if HOME="$FAKE" ./install.sh --host claude --host codex --host opencode >/tmp/opencode/install.out 2>&1 \
+if HOME="$FAKE" XDG_CONFIG_HOME='' ./install.sh --host claude --host codex --host opencode >"$WORK/install.out" 2>&1 \
   && [ -r "$FAKE/.claude/skills/highload-hunt/SKILL.md" ] \
   && [ -r "$FAKE/.claude/commands/highload-hunt.md" ] \
   && [ -r "$FAKE/.codex/prompts/highload-hunt.md" ] \
   && [ -r "$FAKE/.config/opencode/commands/highload-hunt.md" ]; then
   ok "link install places skills and commands"
 else
-  bad "link install places skills and commands" "$(tail -3 /tmp/opencode/install.out | tr '\n' ' ')"
+  bad "link install places skills and commands" "$(tail -3 $WORK/install.out | tr '\n' ' ')"
 fi
 HOME="$FAKE" ./install.sh --host dsh --mode copy >/dev/null 2>&1
 if [ -r "$FAKE/.dsh/skills/highload-hunt/references/load-model.md" ]; then ok "copy install includes references"; else bad "copy install includes references"; fi
@@ -174,11 +177,11 @@ rm -rf "$FAKE"
 
 if [ "$FULL" -eq 1 ]; then
   section "demo ladder (--full)"
-  if DURATION=6 REPEAT=1 bash examples/demo-api/run.sh >/tmp/opencode/demo-run.out 2>&1 \
+  if DURATION=6 REPEAT=1 bash examples/demo-api/run.sh >$WORK/demo-run.out 2>&1 \
     && grep -q 'improved' examples/demo-api/results/delta.md; then
     ok "demo run.sh end to end"
   else
-    bad "demo run.sh end to end" "$(tail -5 /tmp/opencode/demo-run.out | tr '\n' ' ')"
+    bad "demo run.sh end to end" "$(tail -5 $WORK/demo-run.out | tr '\n' ' ')"
   fi
 else
   skip "demo ladder (pass --full)"
