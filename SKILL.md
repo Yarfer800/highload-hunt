@@ -11,6 +11,19 @@ Turn "it feels slow under load" into measured defects, reproducible tests, and p
 
 This skill is a protocol, not advice. Follow the phases in order. Do not skip gates.
 
+## Tooling
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/perf-doctor.sh [--json]` | Preflight facts: stack, start command, datastore, generators, CI, hardware |
+| `scripts/ladder.sh` | Runs 10/50/100/150%, repeated runs, medians, knee detection |
+| `scripts/slo-gate.sh` | Result file → PASS/FAIL exit code, sample and generator checks |
+| `scripts/perf-diff.sh` | Two run series → delta table with medians, spread, gate verdict |
+| `scripts/perf-verify.sh` | Artifact gate: report, tests, runs, no placeholders |
+| `scripts/normalize-result.py` | k6/locust/autocannon/ab/vegeta/ghz → one JSON schema |
+
+`examples/demo-api` is a runnable target with a real defect and a measured before/after in `examples/report.md`.
+
 ## Operating contract
 
 - Default deliverable is a **report plus committed tests**. Not a code rewrite.
@@ -108,7 +121,18 @@ If the user has no SLO, derive one from current p95 at 10% load and state the as
 
 ## Phase 3 — Load ladder
 
-Ramp, do not jump to the target.
+Ramp, do not jump to the target. Use the script so every hunt produces the same artifacts:
+
+```bash
+bash scripts/ladder.sh --runner k6 --script tests/perf/k6/items.js \
+  --rps 300 --levels 10,50,100,150 --repeat 3 \
+  --gate-p95 200 --gate-p99 500 --gate-err 0.5 --gate-rps 300 \
+  --out results/ladder
+```
+
+`--runner autocannon|ab|custom` covers projects without k6. The script writes `ladder.md`, raw outputs, and normalized runs. Exit status is 0 by default: a failing 150% level is expected. Add `--strict` when the ladder is a release gate.
+
+Manual ladder, if the script cannot drive the project's generator:
 
 1. 10% of target, 60 s. Fix outright errors here before continuing.
 2. 50%, 120 s. Watch for the first latency deviation.
@@ -118,7 +142,7 @@ Ramp, do not jump to the target.
 
 Record `rps`, `p50`, `p95`, `p99`, `max`, `error_rate`, plus resource series. Build the curve; the knee is where p95 stops being flat.
 
-Validate the generator itself first: if the generator saturates its own CPU, the numbers describe the laptop, not the service. Say which one you measured.
+Validate the generator itself first: if the generator saturates its own CPU, the numbers describe the laptop, not the service. `slo-gate.sh` fails a run with `dropped_iterations > 0` for this reason.
 
 Use the generator chosen in [references/generators.md](references/generators.md). For internal layers (BFS, pool, queue, cache) use [references/in-process-load.md](references/in-process-load.md).
 
@@ -158,6 +182,14 @@ Write `PERF-REPORT.md` from [references/report-template.md](references/report-te
 
 Then stop and ask. Do not edit production code in this phase. The default answer is "report only"; proceed to fixes only on explicit approval.
 
+Before presenting the report, run the artifact gate:
+
+```bash
+bash scripts/perf-verify.sh --dir . --runs 3
+```
+
+It fails on a missing report, conflicting verdict, placeholders, findings without a reproducer, missing tests, fewer than 3 usable runs, or no "Not tested" section. Fix the gaps before the user sees the report.
+
 ## Phase 7 — Fix and prove
 
 One defect per change. For each approved fix:
@@ -165,15 +197,26 @@ One defect per change. For each approved fix:
 1. Write the failing perf test first, tagged narrowly, asserting the old bad bound.
 2. Apply the smallest fix.
 3. Re-run the **identical** scenario: same generator file, same rate, same duration, same seed, same dataset.
-4. Add the delta row: before, after, change, and the SLO status.
-5. Keep the regression test. It must fail on the pre-fix code path, or assert a bound the old code violated.
+4. Produce the delta with the script, not by hand:
+
+```bash
+bash scripts/perf-diff.sh --before results/before/normalized \
+  --after results/after/normalized --level 100 \
+  --p95 200 --p99 500 --err 0.5 --rps 300 --out results/delta.md
+```
+
+5. Add the delta row: before, after, change, and the SLO status.
+6. Keep the regression test. It must fail on the pre-fix code path, or assert a bound the old code violated.
+
+A delta inside the ±10% noise band is "flat", not an improvement. Report it as flat.
 
 If the fix does not move the number, revert it and say so. A clean revert is a valid result.
 
 ## Phase 8 — Lock it in
 
 - Tests committed under `tests/perf/`, with a short README of how to run each.
-- CI job: smoke load on PR (Tier S, 10% rate), full ladder on schedule or release.
+- CI job from `templates/ci-perf.yml`: smoke load on PR (Tier S, 10% rate), full ladder on schedule or release.
+- `scripts/perf-verify.sh` runs in CI, so a report without evidence fails the build.
 - Flake policy: 3 consecutive runs, compare medians, tolerate 10% variance unless the SLO margin is under 10%, then tighten the test or the SLO.
 - Artifacts: store result JSON next to the report, keep the last N runs.
 
@@ -194,7 +237,7 @@ Use these names everywhere: report, test assertions, CI output.
 
 The hunt ends in exactly one state:
 
-- **PASS**: SLO met on 3 runs, tests committed, report written.
+- **PASS**: SLO met on 3 runs, tests committed, report written, `perf-verify.sh` green.
 - **FAIL**: defects listed with reproducers, report written, fixes awaiting approval.
 - **BLOCKED**: measurement impossible; state the missing piece and what was ruled out.
 
@@ -210,3 +253,6 @@ Never end with "should be fine" or "likely faster now".
 - [references/defect-catalog.md](references/defect-catalog.md) — symptom to mechanism to fix.
 - [references/profiling.md](references/profiling.md) — profilers, DB stats, system counters.
 - [references/report-template.md](references/report-template.md) — report skeleton.
+- [examples/report.md](examples/report.md) — real before/after from `examples/demo-api`.
+- [templates/seed-postgres.sql](templates/seed-postgres.sql), [templates/seed-node.mjs](templates/seed-node.mjs), [templates/seed_python.py](templates/seed_python.py) — deterministic datasets.
+- [templates/ci-perf.yml](templates/ci-perf.yml) — CI job for a consuming project.

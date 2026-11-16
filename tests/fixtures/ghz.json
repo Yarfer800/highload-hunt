@@ -1,0 +1,22 @@
+{
+  "date": "2026-11-16T12:00:00.000Z",
+  "end": "2026-11-16T12:03:00.000Z",
+  "count": 60000,
+  "total": "302.412s",
+  "average": "5.04ms",
+  "fastest": "0.81ms",
+  "slowest": "1.402s",
+  "rps": 198.404,
+  "error": 3,
+  "statusCodeDistribution": { "OK": 59997, "Unavailable": 3 },
+  "errorDistribution": { "rpc error: code = Unavailable desc = upstream connect error": 3 },
+  "latencyDistribution": [
+    { "percentage": 10, "latency": 1820000 },
+    { "percentage": 25, "latency": 2904000 },
+    { "percentage": 50, "latency": 4100200 },
+    { "percentage": 75, "latency": 5901000 },
+    { "percentage": 90, "latency": 8410000 },
+    { "percentage": 95, "latency": 11840000 },
+    { "percentage": 99, "latency": 42500000 }
+  ]
+}

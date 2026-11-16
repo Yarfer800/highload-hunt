@@ -1,0 +1,45 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: repository smoke checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install optional tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq apache2-utils shellcheck || true
+
+      - name: Shellcheck
+        run: |
+          if command -v shellcheck >/dev/null; then
+            shellcheck -S warning scripts/*.sh install.sh tests/smoke.sh examples/demo-api/run.sh
+          else
+            echo "shellcheck unavailable, skipping"
+          fi
+
+      - name: Smoke
+        run: bash tests/smoke.sh
+
+      - name: Demo regression test
+        run: node --test examples/demo-api/test/detail.test.mjs

@@ -1,0 +1,132 @@
+# Template: performance CI for a consuming project.
+# Copy to .github/workflows/perf.yml and replace the TODOs.
+#
+# Two jobs:
+#   perf-smoke  — fast smoke on PR (10% of target rate), catches wiring and regressions
+#   perf-ladder — full ladder on a schedule or manual dispatch, keeps artifacts
+#
+# Rules this template encodes:
+#   - the gate is a script exit code, not a human reading a report
+#   - results are uploaded, so the report always has raw evidence
+#   - the full ladder never runs on the shared PR pool
+
+name: perf
+
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'app/**'
+      - 'service/**'
+      - 'tests/perf/**'
+      - 'k6/**'
+  schedule:
+    - cron: '0 3 * * 1'   # Mondays 03:00 UTC
+  workflow_dispatch:
+    inputs:
+      target_rps:
+        description: 'Target rate at the 100% level'
+        required: false
+        default: '300'
+
+concurrency:
+  group: perf-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  perf-smoke:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: grafana/setup-k6-action@v1
+
+      - name: Start service
+        run: |
+          # TODO: replace with the real start command and wait for readiness.
+          docker compose up -d --build
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:8080/health && break || sleep 2
+          done
+
+      - name: Seed data
+        run: |
+          # TODO: replace with the project seed script and keep the row count stable.
+          bash scripts/seed.sh
+
+      - name: Smoke load (10% rate)
+        env:
+          BASE_URL: http://localhost:8080
+          TARGET_RPS: '30'
+          DURATION: '60s'
+        run: |
+          mkdir -p results
+          k6 run --summary-export=results/smoke.json tests/perf/k6/items.js
+
+      - name: Gate
+        run: |
+          # TODO: thresholds must match the SLO in PERF-REPORT.md.
+          bash scripts/slo-gate.sh --file results/smoke.json \
+            --p95 250 --err 1 --rps 28
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: perf-smoke
+          path: results/
+          retention-days: 14
+
+      - name: Stop service
+        if: always()
+        run: docker compose down -v || true
+
+  perf-ladder:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest-8-cores   # a dedicated runner class, not the PR pool
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: grafana/setup-k6-action@v1
+
+      - name: Start service
+        run: |
+          docker compose up -d --build
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:8080/health && break || sleep 2
+          done
+
+      - name: Seed data
+        run: bash scripts/seed.sh
+
+      - name: Ladder
+        env:
+          RPS: ${{ github.event.inputs.target_rps || '300' }}
+        run: |
+          bash scripts/ladder.sh --runner k6 \
+            --script tests/perf/k6/items.js \
+            --host http://localhost:8080 \
+            --rps "$RPS" --levels 10,50,100,150 --repeat 3 \
+            --gate-p95 200 --gate-p99 500 --gate-err 0.5 --gate-rps "$RPS" \
+            --out results/ladder
+
+      - name: Prove artifacts are complete
+        run: bash scripts/perf-verify.sh --dir . --results results --runs 3
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: perf-ladder
+          path: |
+            results/
+            PERF-REPORT.md
+          retention-days: 30
+
+      - name: Stop service
+        if: always()
+        run: docker compose down -v || true

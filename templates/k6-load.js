@@ -8,7 +8,8 @@ import { randomIntBetween } from 'https://jslib.k6.io/k6-utils/1.4.0/index.js'
 //   WARMUP=60s  DURATION=180s
 //   PATH=/api/items?id=1..N
 //
-// Run: k6 run --summary-export=results/k6-100pct.json templates/k6-load.js
+// Run: mkdir -p results && k6 run --summary-export=results/k6-100pct.json templates/k6-load.js
+// k6 does not create directories: the results dir must exist before the run.
 
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:8080'
 const TARGET_RPS = Number(__ENV.TARGET_RPS || 300)

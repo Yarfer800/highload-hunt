@@ -146,6 +146,7 @@ install_into() {
   else
     mkdir -p "$dest" || return 1
     cp -R "$SRC_DIR/SKILL.md" "$SRC_DIR/references" "$SRC_DIR/templates" "$SRC_DIR/scripts" "$dest/" || return 1
+    [ -d "$SRC_DIR/commands" ] && cp -R "$SRC_DIR/commands" "$dest/" || true
     say "copied skill to $dest"
   fi
 }

@@ -6,6 +6,7 @@ coverage/
 .DS_Store
 results/
 tests/perf/results/
+examples/demo-api/results/
 *.bin
 !tests/perf/results/.gitkeep
 .venv/

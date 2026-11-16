@@ -1,22 +1,36 @@
 #!/usr/bin/env bash
 # perf-doctor.sh — read-only preflight for a highload hunt.
 #
-# Usage: bash scripts/perf-doctor.sh [project-dir]
+# Usage: bash scripts/perf-doctor.sh [--json] [project-dir]
 #
 # Detects stack, entry point, test runner, datastore, generators, and CI so the
 # hunt starts from facts instead of guesses. Changes nothing.
+# --json prints a machine-readable report for agents and CI.
 
 set -uo pipefail
+
+JSON_MODE=0
+if [ "${1:-}" = "--json" ]; then JSON_MODE=1; shift; fi
 
 TARGET="${1:-.}"
 cd "$TARGET" 2>/dev/null || { echo "perf-doctor: cannot cd to $TARGET" >&2; exit 2; }
 
-section() { printf '\n## %s\n' "$1"; }
+CURRENT="general"
+RECORDS=()
+
+section() {
+  CURRENT="$1"
+  [ "$JSON_MODE" -eq 1 ] || printf '\n## %s\n' "$1"
+}
 have() { command -v "$1" >/dev/null 2>&1; }
 file_has() { [ -f "$1" ] && grep -q -- "$2" "$1" 2>/dev/null; }
-note() { printf '  %-22s %s\n' "$1" "$2"; }
+note() {
+  local value="${2//$'\n'/ }"
+  RECORDS+=("$CURRENT"$'\t'"$1"$'\t'"$value")
+  [ "$JSON_MODE" -eq 1 ] || printf '  %-22s %s\n' "$1" "$2"
+}
 
-printf '# perf-doctor report\n'
+[ "$JSON_MODE" -eq 1 ] || printf '# perf-doctor report\n'
 note "path" "$(pwd)"
 note "date" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 if [ -d .git ]; then
@@ -62,7 +76,9 @@ if ls ./*.csproj >/dev/null 2>&1; then note "language" ".NET"; fi
 section "Run commands"
 if [ -f package.json ]; then
   if have node; then note "node" "$(node --version 2>/dev/null)"; fi
-  python3 - <<'PY' 2>/dev/null
+  while IFS=$'\t' read -r script_name script_cmd; do
+    [ -n "$script_name" ] && note "script:$script_name" "$script_cmd"
+  done < <(python3 - <<'PY' 2>/dev/null
 import json
 try:
     pkg = json.load(open('package.json'))
@@ -71,8 +87,9 @@ except Exception:
 scripts = pkg.get('scripts', {})
 for name in ('dev', 'start', 'serve', 'preview', 'build', 'start:prod', 'test', 'test:e2e'):
     if name in scripts:
-        print(f"  {'script:' + name:<22} {scripts[name]}")
+        print(f"{name}\t{scripts[name]}")
 PY
+)
 fi
 for f in Makefile Procfile Procfile.dev compose.yaml docker-compose.yml; do
   [ -f "$f" ] && note "found" "$f"
@@ -131,6 +148,27 @@ if [ -f /sys/fs/cgroup/cpu.max ]; then note "cpu limit" "$(cat /sys/fs/cgroup/cp
 if [ -f /sys/fs/cgroup/memory.max ]; then note "mem limit" "$(cat /sys/fs/cgroup/memory.max)"; fi
 
 section "Next steps"
+if [ "$JSON_MODE" -eq 1 ]; then
+  printf '%s\n' "${RECORDS[@]}" | python3 -c '
+import json, sys
+
+report = {}
+for line in sys.stdin.read().splitlines():
+    if not line.strip():
+        continue
+    section, key, value = (line.split("\t") + ["", ""])[:3]
+    bucket = report.setdefault(section, {})
+    if key in bucket:
+        if not isinstance(bucket[key], list):
+            bucket[key] = [bucket[key]]
+        bucket[key].append(value)
+    else:
+        bucket[key] = value
+print(json.dumps(report, indent=2, ensure_ascii=False))
+'
+  exit 0
+fi
+
 cat <<'EOF'
   1. Confirm the server command and port; use the production build for verdict runs.
   2. Write the load model and SLO (references/load-model.md).

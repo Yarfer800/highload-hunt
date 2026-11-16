@@ -5,6 +5,7 @@
 **A skill that makes AI coding agents prove performance under load — instead of guessing.**
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
+[![CI](https://github.com/Yarfer800/highload-hunt/actions/workflows/ci.yml/badge.svg)](https://github.com/Yarfer800/highload-hunt/actions/workflows/ci.yml)
 [![Agents](https://img.shields.io/badge/agents-Claude%20Code%20%7C%20Codex%20%7C%20DSH%20%7C%20OpenCode%20%7C%20Antigravity-8b5cf6?style=flat-square)](#-install)
 [![Dependencies](https://img.shields.io/badge/runtime%20deps-none-22c55e?style=flat-square)](#-design-principles)
 [![Evidence](https://img.shields.io/badge/verdict-p95%20%2B%20p99%20%2B%20rps%20only-f59e0b?style=flat-square)](#-hard-gates)
@@ -134,6 +135,25 @@ Arguments are freeform: the command loads `SKILL.md`, runs preflight, then the p
 | OpenCode | `~/.config/opencode/commands/highload-hunt.md` | `/highload-hunt` |
 | DSH, Antigravity, Gemini | skill only | natural language trigger |
 
+## 🔬 Worked example
+
+`examples/demo-api` is a zero-dependency Node server with one real defect: a full scan over 200,000 items on every detail request. `examples/report.md` is the report the skill produced, with measured numbers.
+
+```
+before fix   100 rps:  p50 130 ms   p95 377 ms   p99 422 ms
+after fix    100 rps:  p50  18 ms   p95  80 ms   p99  85 ms
+                     -86%          -79%          -80%
+```
+
+Reproduce it in about a minute:
+
+```bash
+bash examples/demo-api/run.sh          # ladder before/after, delta, regression test
+cat examples/demo-api/results/delta.md
+```
+
+The report also records what the hunt ruled out (serialization, generator saturation, client pool size) and what it did not test (writes, datastore, soak). That honesty is part of the protocol.
+
 ## ⚡ Quick start
 
 Once installed, just ask. The skill triggers on the intent, not on a magic command.
@@ -143,11 +163,14 @@ Once installed, just ask. The skill triggers on the intent, not on a magic comma
 Then the agent:
 
 ```bash
-bash scripts/perf-doctor.sh .          # facts, not guesses
-k6 run --summary-export=results/100pct.json tests/perf/k6/items.js
-bash scripts/slo-gate.sh --file results/100pct.json \
-     --p95 200 --p99 500 --err 0.5 --rps 300
+bash scripts/perf-doctor.sh --json .            # facts, not guesses
+bash scripts/ladder.sh --runner k6 \
+     --script tests/perf/k6/items.js --rps 300 \
+     --levels 10,50,100,150 --repeat 3 --out results/ladder
+bash scripts/perf-diff.sh --before results/before/normalized \
+     --after results/after/normalized --level 100 --p95 200 --rps 300
 py-spy record -o profile.svg --pid <pid> --duration 30
+bash scripts/perf-verify.sh --dir . --runs 3
 ```
 
 ...and returns `PERF-REPORT.md` with a verdict, not adjectives.
@@ -155,16 +178,18 @@ py-spy record -o profile.svg --pid <pid> --duration 30
 Gate a run by hand at any time:
 
 ```bash
-$ bash scripts/slo-gate.sh --file results/k6-100pct.json --p95 200 --p99 500 --err 0.5 --rps 300
-slo-gate: results/k6-100pct.json
-  metric       measured       threshold    verdict
-  p95          183.4ms        200ms        PASS
-  p99          402.1ms        500ms        PASS
-  error rate   0.2%           0.5%         PASS
-  rps          301.2          300          PASS
-dropped iters  0              0            PASS
+$ bash scripts/slo-gate.sh --file tests/fixtures/k6-summary.json --p95 200 --p99 500 --err 0.5 --rps 300
+slo-gate: tests/fixtures/k6-summary.json (tool=k6)
+  metric         measured       threshold     verdict
+  p95            186.734ms      200ms         PASS
+  p99            405.882ms      500ms         PASS
+  error rate     0.180%         0.5%          PASS
+  rps            301.190        300           PASS
+  samples        50815          >= 200        PASS
 slo-gate: PASS
 ```
+
+Fixtures are captured from real tool output, not handwritten shapes: k6 `--summary-export`, locust `--csv`, autocannon `-j`, ab text, vegeta JSON, ghz JSON. `normalize-result.py` maps all of them into one schema, so the gate works with whatever the project already uses.
 
 It also fails the run when the **generator** becomes the bottleneck (`dropped_iterations > 0`) or when there are too few samples for the percentile — the two most common sources of fake good news.
 
@@ -181,17 +206,23 @@ It also fails the run when the **generator** becomes the bottleneck (`dropped_it
 | `references/profiling.md` | py-spy, 0x/`--cpu-prof`, pprof, async-profiler, `pg_stat_statements`, locks, cgroups |
 | `references/stack-detection.md` | Manifest → stack → runner → entry point, monorepo rules |
 | `references/report-template.md` | The report skeleton the agent must fill |
-| `templates/` | k6 scenario, locust journey, Node/Python/Go concurrency tests |
+| `templates/` | k6 scenario, locust journey, Node/Python/Go concurrency tests, deterministic Postgres/Python/Node seeds, `ci-perf.yml` |
 | `commands/highload-hunt.md` | `/highload-hunt` launcher for Claude Code, Codex, OpenCode |
-| `scripts/perf-doctor.sh` | Read-only preflight: stack, run command, datastore, generators, CI, hardware |
-| `scripts/slo-gate.sh` | Result JSON → PASS/FAIL exit code for CI |
+| `scripts/perf-doctor.sh` | Read-only preflight: stack, run command, datastore, generators, CI, hardware (`--json` supported) |
+| `scripts/ladder.sh` | Ladder runner: 10/50/100/150%, repeats, medians, knee detection, gate columns |
+| `scripts/slo-gate.sh` | Result file → PASS/FAIL exit code; rejects too few samples and generator bottlenecks |
+| `scripts/perf-diff.sh` | A/B series → delta table, medians, spread, per-level comparison, gate verdict |
+| `scripts/perf-verify.sh` | Artifact gate: report, verdict, findings with evidence, tests, 3 usable runs |
+| `scripts/normalize-result.py` | k6, locust, autocannon, ab, vegeta, ghz → one normalized JSON schema |
+| `examples/demo-api/` | Runnable defect target with a regression test and a measured report |
+| `tests/smoke.sh` | 45 repository self-checks: syntax, fixtures, gates, install matrix, verify |
 
 ## 🧩 Supported stacks and tools
 
 **Stacks:** Node/TypeScript (Next.js, NestJS, Express, Fastify), Python (FastAPI, Django, Flask), Go, JVM, Rust, PHP, .NET.
 The agent detects the manifest and picks the matching runner, profiler, and query stats tool.
 
-**Load:** k6 (default for HTTP SLOs), locust (Python journeys), autocannon (30-second sanity), wrk2 (coordinated-omission-correct tails), vegeta (constant-rate soak), ghz (gRPC), plus direct broker load for workers.
+**Load:** k6 (default for HTTP SLOs), locust (Python journeys), autocannon (30-second sanity), wrk2 (coordinated-omission-correct tails), vegeta (constant-rate soak), ghz (gRPC), plus direct broker load for workers. `normalize-result.py` reads all of their outputs, so the gate does not care which one a project already uses.
 
 **Test runners:** vitest/jest/Playwright, pytest, `go test -tags perf`, JUnit/JMH. All perf tests are tagged so normal CI stays fast.
 
@@ -234,8 +265,15 @@ No. Default output is `PERF-REPORT.md` plus tests. Fixes happen only after you a
 The hunt ends `BLOCKED` with the exact missing piece. The skill forbids inventing numbers.
 
 **Is this a benchmark framework?**
-It is a protocol that tells an agent how to use one correctly — and a few scripts that keep it honest.
+It is a protocol that tells an agent how to use one correctly — plus five scripts that keep it honest and a demo target that proves the scripts work.
+
+**How do I know the scripts themselves are correct?**
+`bash tests/smoke.sh` runs 45 checks: parse fixtures captured from real k6, locust, autocannon, ab, vegeta and ghz output, gate pass/fail cases (including the 100%-errors trap and too-few-samples), diff detection, install matrix in a temp HOME, and the demo regression test. CI runs it on every push.
 
 ## 🤝 Contributing
 
-Issues and PRs welcome: new defect-catalog entries with a real reproducer, new stack detection rows, additional generator templat
+Issues and PRs welcome: new defect-catalog entries with a real reproducer, new stack detection rows, additional generator templates. Keep the zero-dependency rule for `scripts/`.
+
+## 📄 License
+
+[MIT](LICENSE) © Yarfer

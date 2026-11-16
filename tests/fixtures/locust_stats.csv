@@ -1,0 +1,5 @@
+Type,Name,Request Count,Failure Count,Median Response Time,Average Response Time,Min Response Time,Max Response Time,Average Content Size,Requests/s,Failures/s,50%,66%,75%,80%,90%,95%,98%,99%,99.9%,99.99%,100%
+GET,/api/items [list],42150,84,88,96,12,1340,412,234.17,0.47,88,102,114,124,148,183,241,398,1201,1330,1340
+GET,/api/items/[id],15060,12,41,44,8,720,380,83.67,0.07,41,48,54,60,72,86,118,201,640,710,720
+POST,/api/items [create],1500,0,132,141,40,980,120,8.33,0.00,132,150,168,180,214,262,340,520,940,970,980
+,,58710,96,84,92,8,1340,392,326.17,0.53,84,98,110,120,142,178,232,384,1180,1320,1340
